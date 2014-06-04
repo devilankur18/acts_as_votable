@@ -11,7 +11,7 @@ module ActsAsVotable
       aliases = {
 
         :vote_up => [
-          :up_by, :upvote_by, :like_by, :liked_by, 
+          :up_by, :upvote_by, :like_by, :liked_by,
           :up_from, :upvote_from, :upvote_by, :like_from, :liked_from, :vote_from
         ],
 
@@ -79,7 +79,7 @@ module ActsAsVotable
       _votes_ = find_votes_for({
         :voter_id => options[:voter].id,
         :vote_scope => options[:vote_scope],
-        :voter_type => options[:voter].class.base_class.name
+        :voter_type => options[:voter].class.name
       })
 
       if _votes_.count == 0 or options[:duplicate]
@@ -103,7 +103,7 @@ module ActsAsVotable
 
       if vote.save
         self.vote_registered = true if last_update != vote.updated_at
-        update_cached_votes options[:vote_scope]
+        update_cached_votes options[:vote_scope], !!options[:ignore_scope].present?
         return true
       else
         self.vote_registered = false
@@ -114,11 +114,11 @@ module ActsAsVotable
 
     def unvote args = {}
       return false if args[:voter].nil?
-      _votes_ = find_votes_for(:voter_id => args[:voter].id, :vote_scope => args[:vote_scope], :voter_type => args[:voter].class.base_class.name)
+      _votes_ = find_votes_for(:voter_id => args[:voter].id, :vote_scope => args[:vote_scope], :voter_type => args[:voter].class.name)
 
       return true if _votes_.size == 0
       _votes_.each(&:destroy)
-      update_cached_votes args[:vote_scope]
+      update_cached_votes args[:vote_scope], !!args[:ignore_scope].present?
       self.vote_registered = false if votes_for.count == 0
       return true
     end
@@ -163,31 +163,31 @@ module ActsAsVotable
     end
 
     # caching
-    def update_cached_votes vote_scope = nil
+    def update_cached_votes vote_scope = nil, ignore_scope = false
 
       updates = {}
 
       if self.respond_to?(:cached_votes_total=)
-        updates[:cached_votes_total] = count_votes_total(true)
+        updates[:cached_votes_total] = count_votes_total(true, nil, ignore_scope)
       end
 
       if self.respond_to?(:cached_votes_up=)
-        updates[:cached_votes_up] = count_votes_up(true)
+        updates[:cached_votes_up] = count_votes_up(true, nil, ignore_scope)
       end
 
       if self.respond_to?(:cached_votes_down=)
-        updates[:cached_votes_down] = count_votes_down(true)
+        updates[:cached_votes_down] = count_votes_down(true, nil, ignore_scope)
       end
 
       if self.respond_to?(:cached_votes_score=)
         updates[:cached_votes_score] = (
-          (updates[:cached_votes_up] || count_votes_up(true)) -
-          (updates[:cached_votes_down] || count_votes_down(true))
+          (updates[:cached_votes_up] || count_votes_up(true, nil, ignore_scope)) -
+          (updates[:cached_votes_down] || count_votes_down(true, nil, ignore_scope))
         )
       end
 
       if self.respond_to?(:cached_weighted_score=)
-        updates[:cached_weighted_score] = weighted_score(true)
+        updates[:cached_weighted_score] = weighted_score(true, nil, ignore_scope)
       end
 
       if vote_scope
@@ -226,52 +226,54 @@ module ActsAsVotable
 
     # results
     def find_votes_for extra_conditions = {}
+      extra_conditions.except!(:vote_scope) if extra_conditions[:ignore_scope].present? && extra_conditions[:ignore_scope]
+      extra_conditions.except!(:ignore_scope)
       votes_for.where(extra_conditions)
     end
 
     def get_up_votes options={}
-      find_votes_for(:vote_flag => true, :vote_scope => options[:vote_scope])
+      find_votes_for(:vote_flag => true, :vote_scope => options[:vote_scope], ignore_scope: options[:ignore_scope])
     end
 
     def get_down_votes options={}
-      find_votes_for(:vote_flag => false, :vote_scope => options[:vote_scope])
+      find_votes_for(:vote_flag => false, :vote_scope => options[:vote_scope], ignore_scope: options[:ignore_scope])
     end
 
 
     # counting
-    def count_votes_total skip_cache = false, vote_scope = nil
+    def count_votes_total skip_cache = false, vote_scope = nil, ignore_scope = false
       if !skip_cache && self.respond_to?(scope_cache_field :cached_votes_total, vote_scope)
         return self.send(scope_cache_field :cached_votes_total, vote_scope)
       end
-      find_votes_for(:vote_scope => vote_scope).count
+      find_votes_for(:vote_scope => vote_scope, ignore_scope: ignore_scope).count
     end
 
-    def count_votes_up skip_cache = false, vote_scope = nil
+    def count_votes_up skip_cache = false, vote_scope = nil, ignore_scope = false
       if !skip_cache && self.respond_to?(scope_cache_field :cached_votes_up, vote_scope)
         return self.send(scope_cache_field :cached_votes_up, vote_scope)
       end
-      get_up_votes(:vote_scope => vote_scope).count
+      get_up_votes(:vote_scope => vote_scope, ignore_scope: ignore_scope).count
     end
 
-    def count_votes_down skip_cache = false, vote_scope = nil
+    def count_votes_down skip_cache = false, vote_scope = nil, ignore_scope = false
       if !skip_cache && self.respond_to?(scope_cache_field :cached_votes_down, vote_scope)
         return self.send(scope_cache_field :cached_votes_down, vote_scope)
       end
-      get_down_votes(:vote_scope => vote_scope).count
+      get_down_votes(:vote_scope => vote_scope, ignore_scope: ignore_scope).count
     end
 
-    def weighted_score skip_cache = false, vote_scope = nil
+    def weighted_score skip_cache = false, vote_scope = nil, ignore_scope = false
       if !skip_cache && self.respond_to?(scope_cache_field :cached_weighted_score, vote_scope)
         return self.send(scope_cache_field :cached_weighted_score, vote_scope)
       end
-      ups = get_up_votes(:vote_scope => vote_scope).sum(:vote_weight)
-      downs = get_down_votes(:vote_scope => vote_scope).sum(:vote_weight)
+      ups = get_up_votes(:vote_scope => vote_scope, ignore_scope: ignore_scope).sum(:vote_weight)
+      downs = get_down_votes(:vote_scope => vote_scope, ignore_scope: ignore_scope).sum(:vote_weight)
       ups - downs
     end
 
     # voters
     def voted_on_by? voter
-      votes = find_votes_for :voter_id => voter.id, :voter_type => voter.class.base_class.name
+      votes = find_votes_for :voter_id => voter.id, :voter_type => voter.class.name
       votes.count > 0
     end
 
